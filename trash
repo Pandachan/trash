@@ -1,0 +1,755 @@
+#!/usr/bin/env bash
+##################################################################################################################
+# Copyright (c) Itron Networked Solutions 2020-2023 - All rights rerved
+#
+# Author(s):
+#           Masaru Natsu
+#
+# NO SUPPORT OR WARRANTY PROVIDED!
+#
+# Redistribution and use in source and binary forms, with or without modification, are permitted
+# provided that the following conditions are met:
+#
+# (*) Redistributions of source code must retain the above copyright notice, this list of
+#     authors, conditions and the following disclaimer.
+#
+# (*) Redistributions in binary form must reproduce the above copyright notice, this list of
+#     conditions and the following disclaimer in the documentation and/or other materials provided
+#     with the distribution.
+#
+# (*) Neither the name of the copyright holder nor the names of its contributors may be used to endorse
+#     or promote products derived from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+# INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+# USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+##################################################################################################################
+
+####################################################################################################
+# CONFIGURATION
+####################################################################################################
+
+# For how long the files can stay in the trashcan before beign discarded (days old).
+# files DAYS_OLD and older will be permanently removed
+if [ ! -v DAYS_OLD ]; then
+    declare -r DAYS_OLD=5
+fi
+
+# how big our trash can can be, if the limit is reached or exceded the script will ask for a purge
+# Units are:
+#   M = Megabytes
+#   G = Gigabytes
+# Minimum value is 1M for 1 Megabyte.
+if [ ! -v TRASHCAN_SIZE ]; then
+    declare -r TRASHCAN_SIZE=500M
+fi
+
+##################################################################################################################
+##################################################################################################################
+#########################################[ NO CHANGES BEYOND THIS POINT ]#########################################
+##################################################################################################################
+##################################################################################################################
+# Just the version
+declare -r VERSION="1.0.0-20230802-1535"
+
+# We use a temporaty working directory, which we want 
+base_directory="${HOME}/.trashcan"
+mkdir -p ${base_directory}
+
+##
+# Trap handler for any exit code produced byt the script
+function trap_handler
+{
+    #find ${base_directory}/* -mtime +${DAYS_OLD} -delete 2>/dev/null
+    # Clean the failed files if any
+    for each_file in ${base_directory}/*; do
+        if test -e "${each_file}/PATH"; then
+            continue
+        fi
+        rm -fr ${each_file} 2>/dev/null
+    done
+    set +x
+}
+trap trap_handler EXIT
+
+# Simple boolean values for the script code
+declare -r TRUE=1
+declare -r FALSE=0
+declare -r NULL=0
+
+# Two paramter flags
+declare RESTORE=${FALSE}
+declare PURGE=${FALSE}
+declare LIST=${FALSE}
+
+declare -a list_of_files=()
+declare file_to_trash=""
+declare trashcan_kb_size=0
+
+# Script name used in some places in the code specially in the help.
+declare -r script_name="$(basename  ${BASH_SOURCE[0]})"
+declare date_command=""
+
+# file_key = YEARMONTHDAY_HOURMINUTESECOND3MILLISECONDS_FILENAME
+# Generated part of the key = YYYYMMDD_HHmmSS3MS_<file_name>
+declare -r generated_key_part="YYYYMMDD_HHmmss3MS_"
+
+####################################################################################################
+# Print functions here, from help to messages.
+####################################################################################################
+
+##
+# Function to print the version
+function print_version
+{
+    printf "\n\nTrashcan script, Copyright (c) 2020-%s Masaru Natsu: \e[1m%s - %s\e[0m.\n\n" "$(${date_command} +"%Y")" "${script_name}" "${VERSION}"
+}
+
+##
+# I don't think I have to explain this function..
+function print_license
+{
+    printf "\n"
+    printf " \e[1mCOPYRIGHT\e[0m\n"
+    printf " \tCopyright (c) 2020-%s Masaru Natsu\n" "$(${date_command} +"%Y")"
+    printf "\n"
+    printf " \t\e[1m\e[4mNO SUPPORT OR WARRANTY PROVIDED!\e[0m\n"
+    printf "\n"
+    printf " \tRedistribution and use in source and binary forms, with or without modification, are permitted\n"
+    printf " \tprovided that the following conditions are met:\n"
+    printf "\n"
+    printf " \t(\e[1m*\e[0m) Redistributions of source code must retain the above copyright notice, this list of\n"
+    printf " \t%-4sauthors, conditions and the following disclaimer.\n" ""
+    printf "\n"
+    printf " \t(\e[1m*\e[0m) Redistributions in binary form must reproduce the above copyright notice, this list of\n"
+    printf " \t%-4sconditions, and the following disclaimer in the documentation and/or other materials provided\n" ""
+    printf " \t%-4swith the distribution.\n" ""
+    printf "\n"
+    printf " \t(\e[1m*\e[0m) Neither the name of the copyright holder nor the names of its contributors may be used to endorse\n"
+    printf " \t%-4sor promote products derived from this software without specific prior written permission.\n" ""
+    printf "\n"
+    printf " \tTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"\e[1mAS IS\e[0m\" AND ANY EXPRESS OR IMPLIED WARRANTIES,\n"
+    printf " \tINCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\n"
+    printf " \tDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\n"
+    printf " \tSPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\n"
+    printf " \tSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,\n"
+    printf " \tWHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE\n"
+    printf " \tUSE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
+    printf " \n"
+    printf " \e[1mAUTHOR(S)\e[0m\n"
+    printf " \tMasaru Natsu.\n"
+    printf " \n"
+    printf " \e[1mREPORT BUGS\e[0m\n"
+    printf " \tmasaru.natsu@gmail.com\n"
+    printf " \n"
+    printf " \tCopyright (c) 2020-%s Masaru Natsu\n" "$(${date_command} +"%Y")"
+    printf "\n"
+}
+
+##
+# Simple help, if the help is more than one pge it will go into 'less' command with case insensitive search
+# to be similar to 'man' command.
+function print_help
+{
+    local exit_status=$1
+    (printf "\n\n"
+    print_version
+    printf " \e[1mNAME\e[0m\n"
+    printf " \ttrash - Trashcan Script.\n\n"
+    printf " \e[1mSYNOPSIS\e[0m\n"
+    printf " \t\e[1mtrash <file 1> [<file 2> ... <file n>]\e[0m\n"
+    printf " \t\e[1mtrash -r <file 1> [<file 2> ... <file n>]\e[0m\n"
+    printf " \t\e[1mtrash -p\e[0m\n"
+    printf " \t\e[1mtrash -l\e[0m\n"
+    printf " \t\e[1mtrash -h\e[0m\n"
+    printf " \t\e[1mtrash --version\e[0m\n"
+    printf " \t(See the \e[1mOPTIONS\e[0m section for alternate option syntax with long option names).\n\n"
+    printf " \e[1mDESCRIPTION\e[0m\n"
+    printf " \tThis script is used to remove files or directories  from the filesystem and stage them in a \"\e[1mtrashcan\e[0m\" for a limited and user-defined number of days,\n"
+    printf " \tthe stage zone is a directory in the user's home directory named '\e[1m.trashcan\e[0m', the size of the stage zone is defined by the user to avoid overflowing the partition.\n\n"
+    printf " \tThe script's main purpose is to give the user the opportunity to revert mistakes while manipulating files. some of the functionalities included\n"
+    printf " \tin the script are:\n"
+    printf " \t\t- Remove files and directories.\n"
+    printf " \t\t- Restore files and directories to their origin path.\n"
+    printf " \t\t- list the files in the trashcan.\n"
+    printf " \t\t- Restore individually multiple files with the same filename.\n"
+    printf " \t\t- Define a maximum of time (time in days) to keep the files in the trashcan before being purged.\n"
+    printf " \t\t- Define a maximum capacity for the trash can (either Megabytes or Gigabytes) to avoid filesystem overflow.\n"
+    printf " \t\t- Remove multiple files or directories with a single command. (See \e[1mUSAGE EXAMPLES\e[0m).\n"
+    printf " \t\t- Restore multiple files or directories with a single command. (See \e[1mUSAGE EXAMPLES\e[0m).\n"
+    printf " \t\t- Purge the content of the trashcan removing permanently all the files and directories in the trashcan.\n"
+    printf "\n"
+    printf " \tAll the functionality is described in the \e[1mUSAGE EXAMPLES\e[0m and the \e[1mCONFIGURATION\e[0m section.\n"
+    printf "\n"
+    printf " \e[1mASSUMPTIONS\e[0m\n"
+    printf " \t%-4s%s\n" "(*)" "rsync command is installed in the host machine."
+    printf "\n"
+    printf " \t%-4s%s\n" "(*)" "The user uses bash or bash is installed in the host machine."
+    printf "\n"
+    printf " \t%-4s%s\n" "(*)" "The force will be you, always."
+    printf "\n"
+    printf " \e[1mCONFIGURATION\e[0m\n"
+    printf " \tThere are only 2 configuration parameters available, any of these 2 configuration settings can be set by exporting them as environmental variables or\n"
+    printf " \tby setting them in the script's source code.\n"
+    printf "\n"
+    printf " \t\e[1mDAYS_OLD\e[0m\n"
+    printf " \t\tThis is the number of days the files or directories will stay in the trashcan before being completely removed or purged.\n\n"
+    printf " \t\t\e[1mExamples\e[0m:\n"
+    printf " \t\tIn the shell:\n"
+    printf " \t\t\t\e[1mexport DAYS_OLD=10\e[0m\n\n"
+    printf " \t\tIn the code, change the line:\n"
+    printf " \t\t\t\e[1mdeclare -r DAYS_OLD=5\e[0m\n"
+    printf "\n"
+    printf " \t\e[1mTRASHCAN_SIZE\e[0m\n"
+    printf " \t\tThis is how big the trashcan or stage zone can be, or at most how much data can it hold, the units are:\n"
+    printf " \t\t\e[1mM\e[0m = Megabytes.\n"
+    printf " \t\t\e[1mG\e[0m = Gigabytes.\n"
+    printf " \t\tThe minimum size allowed for this configuration option is 1M.\n\n"
+    printf " \t\t\e[1mExamples\e[0m:\n"
+    printf " \t\tIn the shell:\n"
+    printf " \t\t\t\e[1mexport TRASHCAN_SIZE=2GM\e[0m\n\n"
+    printf " \t\tIn the code, change the line:\n"
+    printf " \t\t\t\e[1mdeclare -r TRASHCAN_SIZE=500M\e[0m\n"
+    printf "\n"
+    printf " \e[1mOPTIONS\e[0m\n"
+    printf " \tThe options have to be defined before the file list when it applies. The options have short and long names for easy use.\n"
+    printf " \tThe option '\e[1m-p\e[0m' or '\e[1m--purge\e[0m' will override the option '\e[1m-r\e[0m' or '\e[1m--restore\e[0m' and the option '\e[1m-l\e[0m' or '\e[1m--list\e[0m' will override\n"
+    printf " \tthe purge and restore options.\n"
+    printf "\n"
+    printf " \tOptions:\n"
+    printf " \t\e[1m%12s\e[0m\n" "-p|--purge"
+    printf " %12s\tThis option will remove permanently all the files and directories in the trashcan.\n"
+    printf "\n"
+    printf " \t\e[1m%12s\e[0m\n" "-r|--restore"
+    printf " %12s\tThis option must be followed by the list of files and directories to restore, the full path is not necessary, only the name.\n"
+    printf " %12s\tTo verify names, use the option '\e[1m-l\e[0m' or '\e[1m--list\e[0m' to see the files in the trashcan, if more than one file/directory\n"
+    printf " %12s\twith the same name is found it will prompt a confirmation for each one before restoring it. See the \e[1mEXAMPLES\e[0m section for more details.\n"
+    printf "\n"
+
+    printf " \t\e[1m%12s\e[0m\n" "-l|--list"
+    printf " %12s\tThis option will list all the content of the trashcan and the amount of space used and free in the trashcan/stage zone.\n"
+    printf "\n"
+
+    printf " \t\e[1m%12s\e[0m\n" "-h|--help"
+    printf " %12s\tDisplays this help.\n"
+    printf "\n"
+
+    printf " \t\e[1m%12s\e[0m\n" "--version"
+    printf " %12s\tPrints the version number.\n"
+    printf "\n"
+
+    printf " \t\e[1m%12s\e[0m\n" "--license"
+    printf " %12s\tPrints the script's licensing information.\n"
+    printf "\n"
+
+    printf " \e[1mUSAGE EXAMPLES\e[0m\n"
+    printf " \tThese are some of the most common uses of the tool, this section doesn't cover all the possible combinations supported.\n"
+    printf " \tIn this section, the symbol '\e[1m$\e[0m' denotes the command prompt (shell).\n"
+    printf " \n"
+    printf " \tFor this set of examples, we will use a tree structure that looks like this:\n"
+    printf " \t\tdir.1\n"
+    printf " \t\t├── dir.2\n"
+    printf " \t\t│   ├── dir.4\n"
+    printf " \t\t│   │   └── newfile\n"
+    printf " \t\t│   └── file.6\n"
+    printf " \t\t├── dir.3\n"
+    printf " \t\t│   ├── file.4\n"
+    printf " \t\t│   └── file.7\n"
+    printf " \t\t├── file.1\n"
+    printf " \t\t├── file.2\n"
+    printf " \t\t├── file.3\n"
+    printf " \t\t└── file.4\n"
+    printf "\n"
+    printf " \t\e[1mRemove a file or directory\e[0m.\n"
+    printf " \t\tThese are 3 examples to do the same task, remove a single file.\n"
+    printf "\n"
+    printf " \t\t\t$ ${script_name} dir.1/file.1\n"
+    printf " \t\t\t$ ${script_name} dir.1/dir.3/file.4\n"
+    printf " \t\t\t$ ${script_name} dir.1/dir.2/dir.4/newfile\n"
+    printf "\n"
+    printf " \t\e[1mRemove multiple files or directories\e[0m\n"
+    printf " \t\tRemoving multiple files can be done by specifying each file separately in the same command line.\n"
+    printf "\n"
+    printf " \t\t\t$ cd dir.1; ${script_name} file.2 file.3 dir.3/file.7 dir.2/file.6; cd -\n"
+    printf " \t\t\t$ ${script_name} dir.1/file.4 dir.1/dir.2/dir.4 dir.1/dir.3\n"
+    printf " \n\t\tPlease note that in this example we are also removing directories, the directories don't need to be empty.\n"
+    printf "\n"
+    printf " \t\e[1mRestoring a file or directory\e[0m\n"
+    printf " \t\tThis option will take a file or directory out of the trashcan back to its original path or origin.\n"
+    printf "\n"
+    printf " \t\t\t$ ${script_name} -r file.1\n"
+    printf " \t\t\t$ ${script_name} -r file.4\n"
+    printf " \t\t\t$ ${script_name} -r newfile\n"
+    printf " \n\t\tPlease note that to restore a file there is no need to provide or remember the original path, if more than one file with the\n"
+    printf " \t\tsame name is found in the trashcan, the script will show the information of each and prompt you if you wish to restore it.\n"
+    printf " \t\t\e[1mExample\e[0m:\n"
+    printf " \t\t\t$ ${script_name} -r file.4\n"
+    printf "\n"
+    printf " \t\t\tFile name:     file.4\n"
+    printf " \t\t\tFile size:     0\n"
+    printf " \t\t\tFile key:      20230802_025152574_file.4\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 02:51:52 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/dir.3/\n"
+    printf "\n"
+    printf " \t\t\tDo you wish to restore it [y/n]? y\n"
+    printf " \t\t\tmkdir: created directory '/home/ssn/tmp/dir.1/dir.3/'\n"
+    printf " \t\t\tsending incremental file list\n"
+    printf " \t\t\tfile.4\n"
+    printf " \t\t\t              0 100%%    0.00kB/s    0:00:00 (xfr#1, to-chk=0/1)\n"
+    printf "\n"
+    printf " \t\t\tsent 95 bytes  received 43 bytes  276.00 bytes/sec\n"
+    printf " \t\t\ttotal size is 0  speedup is 0.00\n"
+    printf " \t\t\t[\e[32mSUCCESS\e[39m]: File [ file.4 ] with key [ 20230802_025152574_file.4 ] was fully restored...\n"
+    printf "\n\n"
+    printf " \t\t\tFile name:     file.4\n"
+    printf " \t\t\tFile size:     0\n"
+    printf " \t\t\tFile key:      20230802_025415240_file.4\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 02:54:15 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/\n"
+    printf "\n"
+    printf " \t\t\tDo you wish to restore it [y/n]? n\n"
+    printf "\n"
+    printf " \t\tIn this example we restore one of the 'file.4' but not the other.\n"
+    printf "\n"
+    printf " \t\e[1mRestoring multiple files or directories\e[0m\n"
+    printf " \t\tTo restore multiple files, all that is needed is to provide the list of file names, there is no need to provide the full original path.\n"
+    printf "\n"
+    printf " \t\t\t$ ${script_name} -r file.1 file.2 file.3 file.7 dir.3 newfile\n"
+    printf "\n"
+    printf " \t\tSame as before it will propmt for each file if we wish to restore it, in the case of multiple files with the same name it will\n"
+    printf " \t\tshow them and prompt if we wish to restore them. Note: the ouput is the same as when restoring a single file.\n"
+    printf "\n"
+    printf " \t\e[1mList the content of the trashcan\e[0m\n"
+    printf " \t\tIf we are not sure what we have removed, we can always check what it is in the trashcan by using the option '\e[1m-l\e[0m' or\n"
+    printf " \t\t'\e[1m--list\e[0m' and the output looks like in this example.\n"
+    printf "\n"
+    printf " \t\t\t$ ${script_name} -l\n"
+    printf " \t\t\t\n"
+    printf " \t\t\tFile name:     file.2\n"
+    printf " \t\t\tFile size:     0\n"
+    printf " \t\t\tFile key:      20230802_025322032_file.2\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 02:53:22 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/\n"
+    printf "\n"
+    printf " \t\t\tFile name:     file.7\n"
+    printf " \t\t\tFile size:     0\n"
+    printf " \t\t\tFile key:      20230802_025322062_file.7\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 02:53:22 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/dir.3/\n"
+    printf "\n"
+    printf " \t\t\tFile name:     file.6\n"
+    printf " \t\t\tFile size:     4.0K\n"
+    printf " \t\t\tFile key:      20230802_025322077_file.6\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 02:53:22 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/dir.2/\n"
+    printf "\n"
+    printf " \t\t\tFile name:     file.4\n"
+    printf " \t\t\tFile size:     0\n"
+    printf " \t\t\tFile key:      20230802_031425646_file.4\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 03:14:25 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/\n"
+    printf "\n"
+    printf " \t\t\tFile name:     file.4\n"
+    printf " \t\t\tFile size:     0\n"
+    printf " \t\t\tFile key:      20230802_031425663_file.4\n"
+    printf " \t\t\tDeleted in:    Wed Aug  2 03:14:25 AEST 2023\n"
+    printf " \t\t\tOriginal path: /home/ssn/tmp/dir.1/dir.3/\n"
+    printf "\n"
+    printf " \t\t\tThe trashcan has \e[1m44K\e[0m used out of \e[1m500M\e[0m total capacity...\n"
+    printf " \t\t\tThe files will be staged at most [ \e[1m5 days\e[0m ] from the date they were removed...\n"
+    printf "\n"
+    printf " \t\e[1mPurge the files in the trashcan\e[0m\n"
+    printf " \t\tThis option will remove permanently all the files in the trashcan, it will prompt for confirmation before proceeding.\n"
+    printf " \t\there is an example of purging the trashcan with a single file in it.\n"
+    printf "\n"
+    printf " \t\t\\t$ ${script_name} -p\n"
+    printf "\n"
+    printf " \t\t\t[\e[33mWARNING\e[39m]: This action will remove permanently all the files from the trashcan...\n"
+    printf " \t\t\\tWould you like to proceed [y/n]? y\n"
+    printf "\n"
+    printf " \t\t\\tremoved '/home/ssn/.trashcan/20230802_034013062_test.file/test.file'\n"
+    printf " \t\t\\tremoved '/home/ssn/.trashcan/20230802_034013062_test.file/PATH'\n"
+    printf " \t\t\\tremoved '/home/ssn/.trashcan/20230802_034013062_test.file/TRASH_DATE'\n"
+    printf " \t\t\\tremoved directory '/home/ssn/.trashcan/20230802_034013062_test.file'\n"
+    print_license
+    printf "\n")|less -rIFs
+    exit ${exit_status}
+}
+
+##
+# my traditional error message function, why? when you have to do the same action more than once in your code,
+# you better have a functions.
+function print_error
+{
+    message="$1"
+    printf "[\e[31mERROR\e[39m]: %s\n" "${message}"
+    return 0
+}
+
+##
+# Traditional success messages, same as before, if you do something more than once, have a function.
+function print_success
+{
+    message="$1"
+    printf "[\e[32mSUCCESS\e[39m]: %s\n" "${message}"
+    return 0
+}
+
+##
+# Simple warning message
+function print_warning
+{
+    message="$1"
+    printf "[\e[33mWARNING\e[39m]: %s\n" "${message}"
+    return 0
+}
+
+####################################################################################################
+# Functional code starts here
+####################################################################################################
+
+##
+# Just empty the trash can.
+function purge_trashcan
+{
+    # permanently remove everything in the transcan, very useful spacially when the
+    # trashcan filesystem has been corrupted.
+    printf "\n"
+    print_warning "This action will remove permanently all the files from the trashcan..."
+    read -r -p "Would you like to proceed [y/n]? " -n 1 answer
+
+    printf "\n\n"
+    case ${answer} in
+        y|Y)
+            # any possible positive answer will try to celar the the trashcan.
+            if (rm -vfr ${base_directory}/*); then
+                printf "\n"
+                return 0
+            fi
+            return 1
+            ;;
+        *)
+            # the logic here is that if you invoke "purge" but changed your mind, we failed to purge.
+            # I know is crazy but that iw how my brain is working right now.
+            printf "\n"
+            return 1
+    esac
+    # TODO: add the posibility to choose what to purge.
+    return 0
+}
+
+##
+# This function will process the file(s) name(s) provided and see if any of those exist in the
+# trashcan, if so, it will restore it to its original path, if more than one file have the same
+# name, it will list the files and le
+function restore_from_trash
+{
+    # we assume we might want to restore more than one file
+    for each_file in "${list_of_files[@]}"; do
+        printf "\n"
+
+        # fix the case when is a directory and if provided with the last /
+        local last_char="${each_file: -1}"
+        [ "${last_char}" == "/" ] && each_file="${each_file:0:-1}"
+
+        for each_found in ${base_directory}/*_"${each_file}"; do
+            if ! test -e "${each_found}"/"${each_file}"; then
+                print_error "File [ "${each_file}" ] not found in trashcan, skipping..."
+                continue
+            fi
+            # get the data and present the data
+            local file_key=$(echo "${each_found}"|rev|cut -d "/" -f 1|rev)
+            local file_timestamp=$(< "${each_found}"/TRASH_DATE)
+            local file_original_path=$(< "${each_found}"/PATH)
+            local file_size=$(du -hs "${each_found}"/"${each_file}"|cut -f 1)
+            printf "%-15s\e[1m%s\e[0m\n" "File name:" "${each_file}"
+            printf "%-15s\e[1m%s\e[0m\n" "File size:" "${file_size}"
+            printf "%-15s\e[1m%s\e[0m\n" "File key:" "${file_key}"
+            printf "%-15s\e[1m%s\e[0m\n" "Deleted in:" "${file_timestamp}"
+            printf "%-15s\e[1m%s\e[0m\n" "Original path:" "${file_original_path}"
+            printf "\n"
+            read -r -p "Do you wish to restore it [y/n]? " -n 1 answer
+            printf "\n\n"
+            case ${answer} in
+                y|Y)
+                    if ! mkdir -vp "${file_original_path}"; then
+                        print_error "Unable to restore original path..."
+                        continue
+                    fi
+
+                    rsync -arvzP --remove-source-files  "${each_found}"/"${each_file}"  "${file_original_path}" && find "${each_file}" -type d -empty -delete 2>/dev/null
+
+                    print_success "File [ ""${each_file}"" ] with key [ ""${file_key}"" ] was fully restored..."
+                    printf "\n\n"
+                    if ! rm -fr "${each_found}"; then
+                        print_error "Unable to clear trashcan for file [ ""${each_file}"" ] with key [ ""${file_key}"" ].."
+                    fi
+                    ;;
+                *)
+                    continue
+                    ;;
+            esac
+        done
+    done
+    printf "\n"
+    return 0
+}
+
+##
+# Originally I wasn't going to add the list function, but i thought it might be usefull to know
+# what is in the trashcan, is kind of hack, so the code is copy and pasted, I will optimize this
+# and the restore functionlater.
+function list_files_from_trashcan
+{
+    if ! compgen -G ${base_directory}/* >/dev/null 2>&1; then
+        printf "\nTrashcan exmpty!\n\n"
+        return 0
+    fi
+    for each_file in ${base_directory}/*; do
+        printf "\n"
+        # get the data and present the data
+        local file_key=$(echo "${each_file}"|rev|cut -d "/" -f 1|rev)
+
+        # we do this to avoif having magic number is the case the key changes in the future
+        local file_name="${file_key:${#generated_key_part}}"
+        local file_size=$(du -hs "${each_file}"/"${file_name}"|cut -f 1)
+        local file_timestamp=$(< "${each_file}"/TRASH_DATE)
+        local file_original_path=$(< "${each_file}"/PATH)
+        printf "%-15s\e[1m%s\e[0m\n" "File name:" "${file_name}"
+        printf "%-15s\e[1m%s\e[0m\n" "File size:" "${file_size}"
+        printf "%-15s\e[1m%s\e[0m\n" "File key:" "${file_key}"
+        printf "%-15s\e[1m%s\e[0m\n" "Deleted in:" "${file_timestamp}"
+        printf "%-15s\e[1m%s\e[0m\n" "Original path:" "${file_original_path}"
+    done
+    printf "\n"
+
+    local trashcan_current_size=$(du -hs ${base_directory}| cut -f 1)
+    printf "The trashcan has \e[1m%s\e[0m used out of \e[1m%s\e[0m total capacity...\n" "${trashcan_current_size}" "${TRASHCAN_SIZE}"
+    printf "The files will be staged at most [ \e[1m%s days\e[0m ] from the date they were removed...\n\n" "${DAYS_OLD}"
+    return 0
+}
+
+##
+# This function will initialize some of the global values used during the script.
+function initialize
+{
+    local trashcan_size_units=${TRASHCAN_SIZE: -1}
+    trashcan_kb_size=${TRASHCAN_SIZE:0:-1}
+    case ${trashcan_size_units} in
+        # We need to know how big our trashcan is defined, we support M for Megabytes and G for Gigabytes
+        "M")
+            trashcan_kb_size=$(( trashcan_kb_size * 1024 ))
+            ;;
+        "G")
+            trashcan_kb_size=$(( ( trashcan_kb_size * 1024 ) * 1024 ))
+            ;;
+        *)
+            print_error "Unknow size units!"
+            return 1
+    esac
+
+    # Before doing any thing, remove the old
+    find ${base_directory}/* -mtime +${DAYS_OLD} -delete 2>/dev/null
+
+    if ! (which rsync > /dev/null 2>&1); then
+        print_error "Unable to archive the data command [ rsync ] not found, exiting..."
+        return 1
+    fi
+
+    local current_os=$(uname -s)
+    if [ -z  "${current_os}" ]; then
+        print_error "Unable to determine the local OS, exiting..."
+        exit 1
+    fi
+    case ${current_os} in
+        Linux)
+            date_command="$(which date)"
+            ;;
+        Darwin)
+            date_command="$(which gdate)"
+            ;;
+    esac
+    if [ -z "${date_command}" ]; then
+        print_error "The script needs date command if run on Linux or gdate if run on Mac.."
+        exit 1
+    fi
+
+    return 0
+}
+
+##
+# Main execution code of the script, right after processing the parameters and initializing
+# the code.
+function main
+{
+    # if we need to empty the trashcan, do it and be done with it.
+    if [ ${PURGE} -eq ${TRUE} ]; then
+        if purge_trashcan; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # if we need to restore files, let's get over it.
+    if [ ${RESTORE} -eq ${TRUE} ]; then
+        if restore_from_trash; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # if we need to just list all the files in the trashcan
+    if [ ${LIST} -eq ${TRUE} ]; then
+        if list_files_from_trashcan; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # process the removal of the files.
+    for each_file in "${list_of_files[@]}"; do
+        printf "\n"
+        # fix the case when is a directory and if provided with the last /
+        #each_file="$(printf "%q\n" "${each_file}")"
+
+        local last_char="${each_file: -1}"
+        [ "${last_char}" == "/" ] && each_file="${each_file:0:-1}"
+
+        # see if the file exist, since we will remove from origin we need to have permissions
+        if ! test -r "${each_file}" || ! test -w "${each_file}"; then
+            print_error "Unable to read and write the file [ ""${each_file}"" ] skipping..."
+            continue
+        fi
+
+        # get the path and name of the file to trash..
+        # Whole path to be able able to restore
+        local real_path=$(realpath "${each_file}")
+        # file name for the file key
+        local name_of_the_file=$(echo "${real_path}"|rev |cut -d '/' -f 1|rev)
+        # path only as part of the information to keep
+        local path_only="${real_path%"${name_of_the_file}"}"
+
+        # assume we can read our own directory and the file to 
+        local trashcan_current_size=$(du -s ${base_directory}|cut -f 1)
+        local size_of_file=$(du -s "${each_file}"|cut -f 1)
+        # we can't proceed if there is no room in the trashcan for the file/directory to remove
+        if (( (trashcan_current_size + size_of_file) > trashcan_kb_size )); then
+            print_error "File(s) exceed the space left in the trashcan, skipping..."
+            printf "File size: \e[1m%s\e[0m\n" "$(du -hs "${each_file}"|cut -f 1)"
+            printf "Trashcan has \e[1m%s\e[0m used out of \e[1m%s\e[0m total capacity...\n\n" "$(du -hs ${base_directory}|cut -f 1)" "${TRASHCAN_SIZE}"
+            continue
+        fi
+        # create the file key for the file being removed.
+        # file_key = YEARMONTHDAY_HOURMINUTESECOND3MILLISECONDS_FILENAME
+        local file_key="$(${date_command} +"%Y%m%d_%H%M%S%3N")_"${name_of_the_file}""
+        local trash_date="$(${date_command})"
+
+        if ! mkdir -p ${base_directory}/"${file_key}"; then
+            print_error "Unable to create file key: ""${file_key}"
+            return 1
+        fi
+
+        # try to erase the data, we basically archive the data
+        $(which rsync) -arvzP --remove-source-files "${each_file}" ${base_directory}/"${file_key}" && find "${each_file}" -type d -empty -delete 2>/dev/null
+
+        # store the original path, in case of restore
+        if ! echo "${path_only}" > ${base_directory}/"${file_key}"/PATH; then
+            print_error "Ubale to store restore data!"
+            return 1
+        fi
+
+        # to avoid having people deciphering the file key lets add a time stamp.
+        if ! echo "${trash_date}" > ${base_directory}/"${file_key}"/TRASH_DATE; then
+            print_error "Unable to set the timestamp..."
+            rm -fr ${base_directory}/"${file_key}"/PATH
+            return 1
+        fi
+        print_success "File [ ""${name_of_the_file}"" ] removed with success!"
+    done
+    printf "\n"
+    return 0
+}
+
+####################################################################################################
+# Start of the script code.
+####################################################################################################
+
+# inital basic validation of the parameters.
+[ "$#" -eq ${NULL} ] && printf "No input files or options provided.\n" && exit 1
+
+while [ $# -ne 0 ]; do
+    # get the first parameter it might be an option
+    parameter="$1"
+    shift
+
+    ##
+    # The scrip ony has a subset of parameters, anything else is consider a file.
+    case "${parameter}" in
+        -r|--restore)
+            RESTORE=${TRUE}
+            ;;
+        -p|--purge)
+            PURGE=${TRUE}
+            # we can't restore if the "PRUGE" option is set.
+            RESTORE=${FALSE}
+            ;;
+        -l|--list)
+            RESTORE=${FALSE}
+            PURGE=${FALSE}
+            LIST=${TRUE}
+            ;;
+        -h|--help)
+            print_help 0
+            ;;
+        --version)
+            print_version
+            exit 0
+            ;;
+        --license)
+            print_license
+            exit 0
+            ;;
+        -d|--debug)
+            set -x
+            ;;
+        *)
+            # if we keep providing unknown option we fail, anything else is considered a
+            # filename or filepath.
+            if [ "${parameter:0:1}" == "-" ]; then
+                printf "\n"
+                print_error "Unknown option, exiting.."
+                printf "Use trash -h or trash --help for options..\n\n"
+                exit 1
+            fi
+            # is not an option we considere it a filename or filepath
+            file_to_trash="${parameter}"
+            break
+            ;;
+    esac
+done
+
+# at least 1 file must be processed
+#list_of_files+=( ${file_to_trash} )
+## try to get the rest if any
+#list_of_files+=( ${@:1:$#-1} )
+[ -n "${file_to_trash}" ] && list_of_files+=( "${file_to_trash}" )
+list_of_files+=( "${@}" )
+
+# Initalization code starts here..
+if ! initialize; then
+    print_error "Unable to initialize the script!"
+    exit 1
+fi
+
+# Start the main code of the script here.
+if main; then
+    exit 0
+fi
+exit 1
+
+# EOF
